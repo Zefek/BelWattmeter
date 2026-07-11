@@ -12,6 +12,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: arduino/arduino-lint-action@4de5fc895deecbda2f6b1cc05de7a8fdd5c4c51f  # v2.0.0
         with:
+          project-type: library
           library-manager: false
           compliance: strict
   build:
@@ -36,5 +37,5 @@ jobs:
 
       - name: Compile example
         run: |
-          arduino-cli compile --profile BelWattmeter_Mega ./examples
-          arduino-cli compile --profile BelWattmeter_Uno ./examples
+          arduino-cli compile --profile BelWattmeter_Mega ./examples/BasicRead
+          arduino-cli compile --profile BelWattmeter_Uno ./examples/BasicRead

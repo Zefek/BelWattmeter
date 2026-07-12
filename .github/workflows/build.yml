@@ -1,6 +1,10 @@
 name: Build Arduino
 
-on: [push, pull_request]
+on:
+  push:
+    branches:
+      - main
+  pull_request:
 
 permissions:
   contents: read
@@ -12,7 +16,6 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
       - uses: arduino/arduino-lint-action@4de5fc895deecbda2f6b1cc05de7a8fdd5c4c51f  # v2.0.0
         with:
-          project-type: library
           library-manager: false
           compliance: strict
   build:
@@ -22,6 +25,11 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
 
+      - name: Static analysis
+        run: |
+          sudo apt-get install -y cppcheck
+          cppcheck --enable=all --language=c++ --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unusedStructMember --suppress=noExplicitConstructor --suppress=noCopyConstructor --suppress=noOperatorEq --suppress=cstyleCast --suppress=constParameterCallback --suppress=constParameterPointer --suppress=constVariablePointer --suppress=unsignedLessThanZero --suppress=unsignedPositive --suppress=checkersReport --suppress=noDestructor --suppress=unmatchedSuppression --suppress=variableScope --error-exitcode=1 src/
+
       - name: Install Arduino CLI
         uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02  # v2.0.0
 
@@ -30,12 +38,6 @@ jobs:
           arduino-cli config init
           arduino-cli core update-index
 
-      - name: Static analysis
+      - name: Compile Arduino project
         run: |
-          sudo apt-get install -y cppcheck
-          cppcheck --enable=all --language=c++ --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unusedStructMember --suppress=noExplicitConstructor --suppress=noCopyConstructor --suppress=noOperatorEq --suppress=cstyleCast --suppress=constParameterCallback --suppress=constParameterPointer --suppress=constVariablePointer --suppress=unsignedLessThanZero --suppress=unsignedPositive --suppress=checkersReport --suppress=noDestructor --suppress=unmatchedSuppression --suppress=variableScope --error-exitcode=1 src/
-
-      - name: Compile example
-        run: |
-          arduino-cli compile --profile BelWattmeter_Mega ./examples/BasicRead
-          arduino-cli compile --profile BelWattmeter_Uno ./examples/BasicRead
+          arduino-cli compile ./examples

@@ -48,7 +48,7 @@ Copy this folder into your Arduino `libraries` directory, or add it as a git sub
 
 The callback fires once per interval with the averaged reading, then the window resets automatically. It is skipped for a window in which no valid frame arrived.
 
-Any `Stream` works — a `SoftwareSerial` instance can be passed instead of a hardware port on boards without a spare UART. See [`examples/BasicRead`](examples/BasicRead/BasicRead.ino) for a complete sketch; it uses `Serial1` on boards that have it (e.g. Mega) and falls back to `SoftwareSerial` otherwise (e.g. Uno), selected with `#if defined(HAVE_HWSERIAL1)`.
+Any `Stream` works — a `SoftwareSerial` instance can be passed instead of a hardware port on boards without a spare UART. See [`examples/examples.ino`](examples/examples.ino) for a complete sketch; it uses `Serial1` on boards that have it (e.g. Mega) and falls back to `SoftwareSerial` otherwise (e.g. Uno), selected with `#if defined(HAVE_HWSERIAL1)`.
 
 ## API
 

@@ -1,0 +1,43 @@
+name: Build BelFVE
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'src/**'
+      - 'extras/BelFVE/**'
+      - '.github/workflows/build_belfve.yml'
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'extras/BelFVE/**'
+      - '.github/workflows/build_belfve.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+
+      - name: Install Arduino CLI
+        uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02  # v2.0.0
+
+      - name: Initialize Arduino CLI
+        run: |
+          arduino-cli config init
+          arduino-cli core update-index
+
+      - name: Provide placeholder configuration
+        run: |
+          cp extras/BelFVE/config_default.h extras/BelFVE/config.h
+          cp extras/BelFVE/secret_default.h extras/BelFVE/secret.h
+
+      - name: Compile BelFVE
+        run: |
+          arduino-cli compile ./extras/BelFVE

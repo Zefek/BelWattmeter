@@ -69,6 +69,10 @@ void BelWattmeter::Loop()
               data.consumption = consumptionTmp;
               counter++;
             }
+            else if(!crcOk && frameErrors < 65535)
+            {
+              frameErrors++;
+            }
             state = WAIT_FOR_START;
           }
         }
@@ -102,6 +106,11 @@ void BelWattmeter::Loop()
     }
     Reset();
   }
+}
+
+uint16_t BelWattmeter::GetFrameErrors() const
+{
+  return frameErrors;
 }
 
 void BelWattmeter::Reset()

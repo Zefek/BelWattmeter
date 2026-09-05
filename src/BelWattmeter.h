@@ -34,6 +34,7 @@ class BelWattmeter
     int counter = 0;
     BelData data;
     uint8_t feCount = 0;
+    uint16_t frameErrors = 0;
     void Reset();
 
     void ProcessByte(int dataIndex, uint8_t data);
@@ -41,6 +42,7 @@ class BelWattmeter
   public:
     BelWattmeter(Stream& serial, BelDataCallback callback, unsigned long interval = 60000);
     void Loop();
+    uint16_t GetFrameErrors() const;
 };
 
 #endif

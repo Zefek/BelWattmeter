@@ -56,6 +56,7 @@ Any `Stream` works — a `SoftwareSerial` instance can be passed instead of a ha
 |--------|-------------|
 | `BelWattmeter(Stream& serial, BelDataCallback callback, unsigned long interval = 60000)` | Construct with the serial port the meter is wired to, the callback invoked once per window, and the window length in milliseconds. |
 | `void Loop()` | Read all available bytes, decode complete frames and fire the callback when the window elapses. Call every loop iteration. |
+| `uint16_t GetFrameErrors() const` | Number of frames that arrived complete but failed the CRC check. Cumulative since power-up (saturates at 65535), not reset by the window — intended for device diagnostics that report the health of the serial link. |
 
 The averaged reading is delivered only through the callback; the accumulator is reset internally after each callback.
 
@@ -64,6 +65,7 @@ The averaged reading is delivered only through the callback; the accumulator is 
 ## Notes
 
 - The meter transmits at **9600 baud**; a valid frame has a data length of 28 bytes.
+- `GetFrameErrors()` counts only frames that were framed correctly but whose CRC did not match. Bytes discarded while resynchronising after a lost start marker are not errors and are not counted; neither are frames rejected by the range check, which are plausibility failures rather than transport failures.
 - Averaging is integer-based and spans one window; `consumption` always reflects the latest frame (not averaged).
 - The callback runs synchronously inside `Loop()`, in the context of the main loop. Keep it short — heavy work blocks serial reading and delays the next window. Do **not** call `Loop()` (or anything that re-enters it) from within the callback: it would nest into the main loop and grow the stack on every window, eventually overflowing it on a small MCU. Set a flag and act on it back in `loop()` instead.
 

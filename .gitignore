@@ -3,3 +3,5 @@
 *.elf
 *.hex
 build/
+config.h
+secret.h

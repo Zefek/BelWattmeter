@@ -3,6 +3,7 @@ BelData	KEYWORD1
 BelDataCallback	KEYWORD1
 
 Loop	KEYWORD2
+GetFrameErrors	KEYWORD2
 
 voltage	KEYWORD3
 current	KEYWORD3

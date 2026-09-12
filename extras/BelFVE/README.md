@@ -71,11 +71,18 @@ Všechny jsou v `config_default.h`, takže se dají změnit konfigurací bez zá
 | `BEL_WH_PER_UNIT` | 10 | jednotka `consumption` z BELu ve watthodinách |
 | `BEL_DELTA_MAX_UNITS` | 1000 | přírůstek, nad kterým se Δ zahodí jako nesmysl |
 | `BEL_SILENCE_TIMEOUT_MS` | 150000 | jak dlouho ticho od BELu znamená `Offline` |
+| `BEL_FAULT_MIN_VOLTAGE` | 150 | nad jakým posledním napětím je ticho podezřelé |
+| `BEL_FAULT_MIN_POWER` | 300 | a nad jakým posledním výkonem zároveň |
+| `BEL_FAULT_CLEAR_MIN_POWER` | 50 | jaký výkon musí BEL po návratu ukázat, aby se porucha smazala |
 | `BEL_RX_BUFFER_SIZE` | 4096 | RX buffer `Serial2`, viz níž |
 
 **`BEL_RX_BUFFER_SIZE` musí pokrýt nejdelší zásek smyčky.** Při 9600 Bd je 1024 bajtů jen **1,07 s** dat, kdežto `loop max` v diagnostice ukazuje 1–5 s (TLS handshake při OTA kontrole). Kratší buffer se v takovém záseku přeplní, uprostřed rámce se ztratí bajty a `belFrameErrors` roste. Výchozí 4096 bajtů je 4,3 s, tedy nad rámec i nejhoršího naměřeného záseku. Druhá polovina řešení je nešahat na OTA po minutě — interval je v `secret.h` a pro provoz patří na hodinu.
 
 `DET_STATE_OFF` má v `detector.cpp` fallback na 40, takže **starší `config.h` bez téhle konstanty se přeloží a hysterezi dostane taky** — nasazení nemusí čekat na úpravu config repa.
+
+**Konstanty poruchy fallback záměrně nemají.** `TOPIC_FVE_FAULT` ani tři prahy nejsou v `BelFVE.ino` nijak podchycené, takže `config.h` bez nich **se nepřeloží**. Je to jiná třída konstanty než `DET_STATE_OFF`: u ladicí hodnoty je rozumný default lepší než rozbitý build, ale u názvu topicu ne — fallback by se tiše publikoval jinam a nikdo by si toho nevšiml, protože chybějící alarm nevypadá jinak než klidný provoz. Hlasitá chyba překladu je tady správná odpověď, zvlášť při migraci s dočasnými topicy `fve/data_2` / `fve/state_2`.
+
+Důsledek: **`BelFVE\deploy.ps1` v config repozitáři musí generovat všechny čtyři konstanty dřív, než se tenhle firmware nasadí.** Není to volitelný úklid, bez něj deploy neprojde.
 
 ## Fáze 1: běh bez wattmetru (`BEL_ENABLED 0`)
 
@@ -85,6 +92,7 @@ Wattmetr se připojuje až v druhé fázi, takže uzel zatím jede jen s detekc�
 - **`heaterState`, `dutyA` a `dutyB` jsou skutečné** — detekce běží naplno, protože na wattmetru nezávisí.
 - **`energyA`/`energyB` zůstávají 0.** Přírůstek `consumption` je nulový, takže není co rozdělovat; jakmile se wattmetr připojí, začnou růst od nuly.
 - **Availability je `Online` od startu a nikdy se nepřeklopí na `Offline`.** Časovač ticha BELu je vypnutý, protože „BEL mlčí“ je v téhle fázi normální stav. Last will zůstává funkční, takže mrtvý uzel se pozná dál.
+- **`TOPIC_FVE_FAULT` je vykompilovaný pryč a topic nikdy nevznikne.** Detekce poruchy stojí na tichu BELu, které je tady normální stav — uzel, který poruchu rozpoznat neumí, nesmí publikovat ani `Ok`. V HA zůstane entita v `unknown`, což je poctivý stav.
 
 Parser i `Serial2` běží dál a `belFrameErrors` se počítá — na nezapojeném vstupu by měl zůstat na nule. Pokud by tam číslo lezlo nahoru, chytá pin rušení. Callback z knihovny je ale v téhle fázi umlčený, takže i kdyby náhodou proletěl platný rámec, na drát se nedostane.
 

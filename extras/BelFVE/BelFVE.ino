@@ -83,6 +83,7 @@ uint16_t lastConsumption = 0;
 bool consumptionValid = false;
 
 enum BelAvailability { BEL_UNKNOWN, BEL_ONLINE, BEL_OFFLINE };
+enum FaultState { FAULT_UNKNOWN, FAULT_OK, FAULT_SUSPECT };
 
 uint16_t otaFailures = 0;
 unsigned long lastDiagSend = 0;
@@ -92,6 +93,8 @@ unsigned long lastHaSend = 0;
 uint16_t belFrameErrorBase = 0;
 BelAvailability belAvailability = BEL_UNKNOWN;
 BelAvailability sentAvailability = BEL_UNKNOWN;
+FaultState faultState = FAULT_UNKNOWN;
+FaultState sentFault = FAULT_UNKNOWN;
 bool timeSynced = false;
 char ntpFromDhcp[16] = "";
 
@@ -162,6 +165,7 @@ bool EnsureConnected()
   if(WiFi.status() != WL_CONNECTED)
   {
     sentAvailability = BEL_UNKNOWN;
+    sentFault = FAULT_UNKNOWN;
     if(currentDiagData.wifiReconnects < 65535)
     {
       currentDiagData.wifiReconnects++;
@@ -195,6 +199,7 @@ bool EnsureConnected()
   if(!connected)
   {
     sentAvailability = BEL_UNKNOWN;
+    sentFault = FAULT_UNKNOWN;
     if(currentDiagData.mqttFailCount < 65535)
     {
       currentDiagData.mqttFailCount++;
@@ -203,6 +208,7 @@ bool EnsureConnected()
     return false;
   }
   sentAvailability = BEL_UNKNOWN;
+  sentFault = FAULT_UNKNOWN;
   Serial.println("MQTT: pripojeno");
   return true;
 }
@@ -218,6 +224,20 @@ void PublishAvailability()
   {
     sentAvailability = belAvailability;
     Serial.printf("FVE availability: %s\n", state);
+  }
+}
+
+void PublishFault()
+{
+  if(faultState == FAULT_UNKNOWN || faultState == sentFault)
+  {
+    return;
+  }
+  const char* state = faultState == FAULT_SUSPECT ? "Fault" : "Ok";
+  if(mqtt.publish(TOPIC_FVE_FAULT, state, true))
+  {
+    sentFault = faultState;
+    Serial.printf("FVE fault: %s\n", state);
   }
 }
 
@@ -340,6 +360,12 @@ void loop()
     {
       belFrameErrorBase = bel.GetFrameErrors();
     }
+    if(belAvailability == BEL_ONLINE)
+    {
+      bool producing = pendingBelData.voltage >= BEL_FAULT_MIN_VOLTAGE && pendingBelData.power >= BEL_FAULT_MIN_POWER;
+      faultState = producing ? FAULT_SUSPECT : FAULT_OK;
+      Serial.printf("BEL ticho, posledni U=%d P=%d -> %s\n", pendingBelData.voltage, pendingBelData.power, producing ? "Fault" : "Ok");
+    }
     belAvailability = BEL_OFFLINE;
   }
 #else
@@ -351,6 +377,9 @@ void loop()
 #endif
   if(connected)
   {
+#if BEL_ENABLED
+    PublishFault();
+#endif
     PublishAvailability();
   }
 
@@ -360,17 +389,20 @@ void loop()
     lastBelData = currentMillis;
     lastHaSend = currentMillis;
     belAvailability = BEL_ONLINE;
+#if BEL_ENABLED
+    if(faultState != FAULT_SUSPECT || pendingBelData.power >= BEL_FAULT_CLEAR_MIN_POWER)
+    {
+      faultState = FAULT_OK;
+    }
+#endif
     DetectorWindow window;
     detectorTakeFast(&window);
     heaterState = detectorState(&window, heaterState);
     AccumulateEnergy(&pendingBelData, &window);
+    detectorLog(&window, connected ? "online" : "offline", heaterState);   // DOCASNA DIAGNOSTIKA
     if(connected)
     {
       PublishHomeAssistant(&pendingBelData, &window);
-    }
-    else
-    {
-      detectorLog(&window, "offline", heaterState);
     }
   }
 

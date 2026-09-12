@@ -29,6 +29,9 @@ class BelWattmeter
     unsigned int currentTmp = 0;
     unsigned int consumptionTmp = 0;
     unsigned int powerTmp = 0;
+    uint32_t voltageSum = 0;
+    uint32_t currentSum = 0;
+    uint32_t powerSum = 0;
     byte crc = 0;
     bool crcOk = false;
     int counter = 0;

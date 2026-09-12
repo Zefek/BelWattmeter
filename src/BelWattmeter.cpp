@@ -63,9 +63,9 @@ void BelWattmeter::Loop()
           {
             if(crcOk && voltageTmp < 360 && currentTmp < 1600 && powerTmp < 4000)
             {
-              data.voltage = ((unsigned long)data.voltage * counter + voltageTmp) / (counter + 1);
-              data.current = ((unsigned long)data.current * counter + currentTmp) / (counter + 1);
-              data.power = ((unsigned long)data.power * counter + powerTmp) / (counter + 1);
+              voltageSum += voltageTmp;
+              currentSum += currentTmp;
+              powerSum += powerTmp;
               data.consumption = consumptionTmp;
               counter++;
             }
@@ -102,6 +102,10 @@ void BelWattmeter::Loop()
     lastEmit = millis();
     if(callback != nullptr && counter > 0)
     {
+      uint32_t half = (uint32_t)counter / 2;
+      data.voltage = (int)((voltageSum + half) / (uint32_t)counter);
+      data.current = (int)((currentSum + half) / (uint32_t)counter);
+      data.power = (int)((powerSum + half) / (uint32_t)counter);
       callback(data);
     }
     Reset();
@@ -119,5 +123,8 @@ void BelWattmeter::Reset()
   data.current = 0;
   data.power = 0;
   data.consumption = 0;
+  voltageSum = 0;
+  currentSum = 0;
+  powerSum = 0;
   counter = 0;
 }

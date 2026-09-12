@@ -6,7 +6,7 @@ Arduino library for reading **BEL single-phase energy meters** over a serial lin
 
 - **Framed protocol parser:** Handles start/stop markers (`0xFC` / `0xFE`), byte unescaping (`0xFD`) and per-frame CRC validation.
 - **Range checking:** Rejects implausible readings (voltage, current, power out of range) so glitches don't corrupt the output.
-- **Running average:** Voltage, current and power are averaged across all frames received during the current window.
+- **Windowed average:** Voltage, current and power are summed across every valid frame in the window and divided once when the window closes, rounded to nearest. Only `consumption` is passed through unaveraged.
 - **Timed callback:** Once per interval (default 60 s) the library invokes your callback with the averaged reading and resets the window automatically — no manual polling needed.
 - **Injectable serial port:** The stream is passed to the constructor, so any `HardwareSerial` (Serial1/2/3) or `SoftwareSerial` works.
 
@@ -66,7 +66,9 @@ The averaged reading is delivered only through the callback; the accumulator is 
 
 - The meter transmits at **9600 baud**; a valid frame has a data length of 28 bytes.
 - `GetFrameErrors()` counts only frames that were framed correctly but whose CRC did not match. Bytes discarded while resynchronising after a lost start marker are not errors and are not counted; neither are frames rejected by the range check, which are plausibility failures rather than transport failures.
-- Averaging is integer-based and spans one window; `consumption` always reflects the latest frame (not averaged).
+- Averaging is integer-based and spans one window; `consumption` always reflects the latest frame (not averaged), because it is a cumulative register.
+- The sums are kept in `uint32` and divided once at the end of the window rather than folded into a running mean, so no rounding error accumulates across frames. Overflow is not a concern: at 9600 baud a 28-byte frame takes about 31 ms, so even an hour-long window stays four orders of magnitude below the limit.
+- Voltage, current and power are averaged **independently**, so `voltage x current` will not equal `power` exactly. That is expected — `power` is what the meter itself reports, and deriving it from the other two would be less accurate, not more.
 - The callback runs synchronously inside `Loop()`, in the context of the main loop. Keep it short — heavy work blocks serial reading and delays the next window. Do **not** call `Loop()` (or anything that re-enters it) from within the callback: it would nest into the main loop and grow the stack on every window, eventually overflowing it on a small MCU. Set a flag and act on it back in `loop()` instead.
 
 ## License

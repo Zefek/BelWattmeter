@@ -1,5 +1,20 @@
 #include "BelWattmeter.h"
 
+const int16_t voltageLimit = 430;
+const int16_t currentLimit = 2000;
+const int16_t powerLimit = 8600;
+
+bool InRange(int16_t value, int16_t limit)
+{
+  return value > -limit && value < limit;
+}
+
+int AverageRounded(int32_t sum, int count)
+{
+  int32_t half = (int32_t)count / 2;
+  return (int)((sum >= 0 ? sum + half : sum - half) / (int32_t)count);
+}
+
 BelWattmeter::BelWattmeter(Stream& serial, BelDataCallback callback, unsigned long interval)
   : serial(serial), callback(callback), interval(interval)
 {
@@ -61,11 +76,14 @@ void BelWattmeter::Loop()
           feCount++;
           if(feCount == 2)
           {
-            if(crcOk && voltageTmp < 360 && currentTmp < 1600 && powerTmp < 4000)
+            int16_t voltage = (int16_t)voltageTmp;
+            int16_t current = (int16_t)currentTmp;
+            int16_t power = (int16_t)powerTmp;
+            if(crcOk && InRange(voltage, voltageLimit) && InRange(current, currentLimit) && InRange(power, powerLimit))
             {
-              voltageSum += voltageTmp;
-              currentSum += currentTmp;
-              powerSum += powerTmp;
+              voltageSum += voltage;
+              currentSum += current;
+              powerSum += power;
               data.consumption = consumptionTmp;
               counter++;
             }
@@ -102,10 +120,9 @@ void BelWattmeter::Loop()
     lastEmit = millis();
     if(callback != nullptr && counter > 0)
     {
-      uint32_t half = (uint32_t)counter / 2;
-      data.voltage = (int)((voltageSum + half) / (uint32_t)counter);
-      data.current = (int)((currentSum + half) / (uint32_t)counter);
-      data.power = (int)((powerSum + half) / (uint32_t)counter);
+      data.voltage = AverageRounded(voltageSum, counter);
+      data.current = AverageRounded(currentSum, counter);
+      data.power = AverageRounded(powerSum, counter);
       callback(data);
     }
     Reset();

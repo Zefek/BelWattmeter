@@ -359,6 +359,7 @@ void loop()
     if(belAvailability != BEL_OFFLINE)
     {
       belFrameErrorBase = bel.GetFrameErrors();
+      consumptionValid = false;
     }
     if(belAvailability == BEL_ONLINE)
     {

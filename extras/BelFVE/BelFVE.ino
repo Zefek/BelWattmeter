@@ -9,6 +9,7 @@
 #include "secret.h"
 #include "ota.h"
 #include "detector.h"
+#include "fan.h"
 
 #ifndef FW_VERSION
 #define FW_VERSION 0
@@ -45,6 +46,7 @@ struct FveData
   uint8_t dutyB[2];
   uint8_t energyA[8];
   uint8_t energyB[8];
+  uint8_t fanState;
 };
 
 struct DiagData
@@ -65,11 +67,16 @@ struct DiagData
   uint8_t resetReason;
   uint16_t fwVersion;
   int8_t rssi;
+  uint16_t fanRpmA;
+  uint16_t fanRpmB;
+  uint8_t fanRunPctA;
+  uint8_t fanRunPctB;
+  uint16_t fanMismatchSlots;
 };
 #pragma pack(pop)
 
-static_assert(sizeof(FveData) == 37, "FveData wire layout must stay 37 bytes");
-static_assert(sizeof(DiagData) == 32, "DiagData wire layout must stay 32 bytes");
+static_assert(sizeof(FveData) == 38, "FveData wire layout must stay 38 bytes");
+static_assert(sizeof(DiagData) == 40, "DiagData wire layout must stay 40 bytes");
 
 FveData currentFveData;
 DiagData currentDiagData;
@@ -275,16 +282,18 @@ void PublishHomeAssistant(const BelData* data, const DetectorWindow* window)
   convertToHalfByte(detectorDuty(window, DET_CHANNEL_B), currentFveData.dutyB, 2);
   convertToHalfByte((uint32_t)(energyMilliWhA / 1000ULL), currentFveData.energyA, 8);
   convertToHalfByte((uint32_t)(energyMilliWhB / 1000ULL), currentFveData.energyB, 8);
+  currentFveData.fanState = (uint8_t)fanStateChar();
 
   mqtt.publish(TOPIC_FVE, (const uint8_t*)&currentFveData, sizeof(FveData), true);
-  Serial.printf("FVE publish: U=%d I=%d P=%d E=%d stav=%c EA=%lu EB=%lu\n",
+  Serial.printf("FVE publish: U=%d I=%d P=%d E=%d stav=%c vent=%c EA=%lu EB=%lu\n",
     data->voltage, data->current, data->power, data->consumption,
     heaterState,
+    fanStateChar(),
     (unsigned long)(energyMilliWhA / 1000ULL),
     (unsigned long)(energyMilliWhB / 1000ULL));
 }
 
-void PublishDiagnostics(const DetectorWindow* window)
+void PublishDiagnostics(const DetectorWindow* window, const FanWindow* fans)
 {
   uint16_t dropouts = window->dropouts[DET_CHANNEL_A] > window->dropouts[DET_CHANNEL_B]
     ? window->dropouts[DET_CHANNEL_A]
@@ -302,10 +311,16 @@ void PublishDiagnostics(const DetectorWindow* window)
   currentDiagData.rippleB = window->ripple[DET_CHANNEL_B];
   currentDiagData.fwVersion = (uint16_t)FW_VERSION;
   currentDiagData.rssi = (int8_t)WiFi.RSSI();
+  currentDiagData.fanRpmA = fanRpm(fans, FAN_A);
+  currentDiagData.fanRpmB = fanRpm(fans, FAN_B);
+  currentDiagData.fanRunPctA = fanRunPct(fans, FAN_A);
+  currentDiagData.fanRunPctB = fanRunPct(fans, FAN_B);
+  currentDiagData.fanMismatchSlots = fans->mismatchSlots;
 
   mqtt.publish(TOPIC_FVE_DIAG, (const uint8_t*)&currentDiagData, sizeof(DiagData), false);
   currentDiagData.loopMaxMs = 0;
   detectorLog(window, "diag", heaterState);
+  fanLog(fans, "diag");
 }
 
 void setup()
@@ -318,6 +333,7 @@ void setup()
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   detectorInit();
+  fanInit();
 
   WiFi.mode(WIFI_STA);
   esp_sntp_servermode_dhcp(true);
@@ -352,6 +368,7 @@ void loop()
   mqtt.loop();
   bel.Loop();
   detectorDrain();
+  fanLoop();
 
 #if BEL_ENABLED
   if(currentMillis - lastBelData >= BEL_SILENCE_TIMEOUT_MS)
@@ -411,14 +428,17 @@ void loop()
   {
     lastDiagSend = currentMillis;
     DetectorWindow window;
+    FanWindow fans;
     detectorTakeSlow(&window);
+    fanTake(&fans);
     if(connected)
     {
-      PublishDiagnostics(&window);
+      PublishDiagnostics(&window, &fans);
     }
     else
     {
       detectorLog(&window, "diag-offline", heaterState);
+      fanLog(&fans, "diag-offline");
     }
   }
 

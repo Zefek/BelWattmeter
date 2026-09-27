@@ -5,7 +5,7 @@
 #define FAN_PULSES_PER_REV 2
 #endif
 #ifndef FAN_PULSE_MIN_US
-#define FAN_PULSE_MIN_US 300
+#define FAN_PULSE_MIN_US 800
 #endif
 #ifndef FAN_SLOT_MS
 #define FAN_SLOT_MS 1000
@@ -23,6 +23,13 @@ volatile uint32_t fanLastPulseUs[FAN_COUNT];
 
 uint32_t fanPrevPulses[FAN_COUNT];
 bool fanRunFlag[FAN_COUNT];
+
+uint32_t fanHeldPulses[FAN_COUNT];
+uint32_t fanHeldMs[FAN_COUNT];
+bool fanHeldRunning[FAN_COUNT];
+bool fanPrevRunning[FAN_COUNT];
+bool fanHeldValid = false;
+
 unsigned long fanLastSlot = 0;
 FanWindow fanWindow;
 
@@ -52,12 +59,23 @@ void IRAM_ATTR OnFanPulseB()
 
 void ResetFanWindow(FanWindow* window)
 {
-  window->windowMs = 0;
+  window->totalSlots = 0;
   window->mismatchSlots = 0;
   for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
-    window->runMs[i] = 0;
-    window->runPulses[i] = 0;
+    window->avgPulses[i] = 0;
+    window->avgMs[i] = 0;
+    window->avgSlots[i] = 0;
+    window->nonZeroSlots[i] = 0;
+  }
+}
+
+void DropHeldSlot()
+{
+  fanHeldValid = false;
+  for(uint8_t i = 0; i < FAN_COUNT; i++)
+  {
+    fanPrevRunning[i] = false;
   }
 }
 
@@ -70,7 +88,12 @@ void fanInit()
     fanLastPulseUs[i] = 0;
     fanPrevPulses[i] = 0;
     fanRunFlag[i] = false;
+    fanHeldPulses[i] = 0;
+    fanHeldMs[i] = 0;
+    fanHeldRunning[i] = false;
+    fanPrevRunning[i] = false;
   }
+  fanHeldValid = false;
   pinMode(FAN_TACH_PIN_A, INPUT_PULLUP);
   pinMode(FAN_TACH_PIN_B, INPUT_PULLUP);
   fanLastSlot = millis();
@@ -97,32 +120,52 @@ void fanLoop()
   portEXIT_CRITICAL(&fanMux);
 
   uint32_t delta[FAN_COUNT];
+  bool running[FAN_COUNT];
   for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
     delta[i] = pulses[i] - fanPrevPulses[i];
     fanPrevPulses[i] = pulses[i];
-    fanRunFlag[i] = delta[i] >= FAN_RUN_MIN_PULSES;
+    running[i] = delta[i] >= FAN_RUN_MIN_PULSES;
+    fanRunFlag[i] = running[i];
   }
 
   if(elapsed > FAN_SLOT_MAX_MS)
   {
     Serial.printf("FAN: slot %lu ms zahozen\n", elapsed);
+    DropHeldSlot();
     return;
   }
 
-  fanWindow.windowMs += (uint32_t)elapsed;
-  for(uint8_t i = 0; i < FAN_COUNT; i++)
+  if(fanHeldValid)
   {
-    if(fanRunFlag[i])
+    fanWindow.totalSlots++;
+    for(uint8_t i = 0; i < FAN_COUNT; i++)
     {
-      fanWindow.runMs[i] += (uint32_t)elapsed;
-      fanWindow.runPulses[i] += delta[i];
+      if(fanHeldRunning[i])
+      {
+        fanWindow.nonZeroSlots[i]++;
+        if(fanPrevRunning[i] && running[i])
+        {
+          fanWindow.avgPulses[i] += fanHeldPulses[i];
+          fanWindow.avgMs[i] += fanHeldMs[i];
+          fanWindow.avgSlots[i]++;
+        }
+      }
+      fanPrevRunning[i] = fanHeldRunning[i];
+    }
+    if(fanHeldRunning[FAN_A] != fanHeldRunning[FAN_B] && fanWindow.mismatchSlots < 65535)
+    {
+      fanWindow.mismatchSlots++;
     }
   }
-  if(fanRunFlag[FAN_A] != fanRunFlag[FAN_B] && fanWindow.mismatchSlots < 65535)
+
+  for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
-    fanWindow.mismatchSlots++;
+    fanHeldPulses[i] = delta[i];
+    fanHeldMs[i] = (uint32_t)elapsed;
+    fanHeldRunning[i] = running[i];
   }
+  fanHeldValid = true;
 }
 
 void fanTake(FanWindow* window)
@@ -133,22 +176,22 @@ void fanTake(FanWindow* window)
 
 uint16_t fanRpm(const FanWindow* window, uint8_t fan)
 {
-  if(window->runMs[fan] == 0)
+  if(window->avgMs[fan] == 0)
   {
     return 0;
   }
-  uint64_t rpm = (uint64_t)window->runPulses[fan] * 60000ULL
-    / ((uint64_t)FAN_PULSES_PER_REV * window->runMs[fan]);
+  uint64_t rpm = (uint64_t)window->avgPulses[fan] * 60000ULL
+    / ((uint64_t)FAN_PULSES_PER_REV * window->avgMs[fan]);
   return rpm > 65535ULL ? (uint16_t)65535 : (uint16_t)rpm;
 }
 
 uint8_t fanRunPct(const FanWindow* window, uint8_t fan)
 {
-  if(window->windowMs == 0)
+  if(window->totalSlots == 0)
   {
     return 0;
   }
-  uint32_t pct = window->runMs[fan] * 100UL / window->windowMs;
+  uint32_t pct = (uint32_t)window->nonZeroSlots[fan] * 100UL / window->totalSlots;
   return pct > 100 ? (uint8_t)100 : (uint8_t)pct;
 }
 
@@ -164,18 +207,19 @@ char fanStateChar()
 
 void fanLog(const FanWindow* window, const char* label)
 {
-  Serial.printf("FAN %s: okno=%lus mismatch=%u",
+  Serial.printf("FAN %s: slotu=%u mismatch=%u",
     label,
-    (unsigned long)(window->windowMs / 1000UL),
+    window->totalSlots,
     window->mismatchSlots);
   for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
-    Serial.printf("  %c: %u ot/min bezel=%u%% (%lus, %lu imp)",
+    Serial.printf("  %c: %u ot/min bezel=%u%% (%u nenulovych, prumer z %u, %lu imp)",
       i == FAN_A ? 'A' : 'B',
       fanRpm(window, i),
       fanRunPct(window, i),
-      (unsigned long)(window->runMs[i] / 1000UL),
-      (unsigned long)window->runPulses[i]);
+      window->nonZeroSlots[i],
+      window->avgSlots[i],
+      (unsigned long)window->avgPulses[i]);
   }
   Serial.println();
 }

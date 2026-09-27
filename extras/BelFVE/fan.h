@@ -8,9 +8,11 @@
 
 struct FanWindow
 {
-  uint32_t runMs[FAN_COUNT];
-  uint32_t runPulses[FAN_COUNT];
-  uint32_t windowMs;
+  uint32_t avgPulses[FAN_COUNT];
+  uint32_t avgMs[FAN_COUNT];
+  uint16_t avgSlots[FAN_COUNT];
+  uint16_t nonZeroSlots[FAN_COUNT];
+  uint16_t totalSlots;
   uint16_t mismatchSlots;
 };
 

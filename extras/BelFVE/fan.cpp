@@ -1,11 +1,12 @@
 #include "fan.h"
 #include "config.h"
+#include "driver/pulse_cnt.h"
 
 #ifndef FAN_PULSES_PER_REV
-#define FAN_PULSES_PER_REV 2
+#define FAN_PULSES_PER_REV 4
 #endif
-#ifndef FAN_PULSE_MIN_US
-#define FAN_PULSE_MIN_US 800
+#ifndef FAN_PCNT_FILTER_NS
+#define FAN_PCNT_FILTER_NS 10000
 #endif
 #ifndef FAN_SLOT_MS
 #define FAN_SLOT_MS 1000
@@ -17,11 +18,11 @@
 #define FAN_RUN_MIN_PULSES 10
 #endif
 
-portMUX_TYPE fanMux = portMUX_INITIALIZER_UNLOCKED;
-volatile uint32_t fanPulses[FAN_COUNT];
-volatile uint32_t fanLastPulseUs[FAN_COUNT];
+pcnt_unit_handle_t fanPcntUnit[FAN_COUNT] = { NULL, NULL };
 
+uint32_t fanPcntTotal[FAN_COUNT];
 uint32_t fanPrevPulses[FAN_COUNT];
+uint32_t fanWindowPulses[FAN_COUNT];
 bool fanRunFlag[FAN_COUNT];
 
 uint32_t fanHeldPulses[FAN_COUNT];
@@ -31,42 +32,86 @@ bool fanPrevRunning[FAN_COUNT];
 bool fanHeldValid = false;
 
 unsigned long fanLastSlot = 0;
+unsigned long fanWindowStartMs = 0;
 FanWindow fanWindow;
 
-void IRAM_ATTR OnFanPulseA()
+void SetupPcnt(uint8_t fan, int pin)
 {
-  uint32_t now = micros();
-  portENTER_CRITICAL_ISR(&fanMux);
-  if(now - fanLastPulseUs[FAN_A] >= FAN_PULSE_MIN_US)
+  pcnt_unit_config_t unitConfig = {};
+  unitConfig.low_limit = -32768;
+  unitConfig.high_limit = 32767;
+  if(pcnt_new_unit(&unitConfig, &fanPcntUnit[fan]) != ESP_OK)
   {
-    fanLastPulseUs[FAN_A] = now;
-    fanPulses[FAN_A] = fanPulses[FAN_A] + 1;
+    fanPcntUnit[fan] = NULL;
+    Serial.print(F("FAN: PCNT jednotka selhala na kanalu "));
+    Serial.println(fan);
+    return;
   }
-  portEXIT_CRITICAL_ISR(&fanMux);
+
+  pcnt_chan_config_t chanConfig = {};
+  chanConfig.edge_gpio_num = pin;
+  chanConfig.level_gpio_num = -1;
+  pcnt_channel_handle_t channel = NULL;
+  if(pcnt_new_channel(fanPcntUnit[fan], &chanConfig, &channel) != ESP_OK)
+  {
+    fanPcntUnit[fan] = NULL;
+    Serial.print(F("FAN: PCNT kanal selhal na kanalu "));
+    Serial.println(fan);
+    return;
+  }
+
+  pcnt_channel_set_edge_action(channel,
+    PCNT_CHANNEL_EDGE_ACTION_INCREASE,
+    PCNT_CHANNEL_EDGE_ACTION_INCREASE);
+  pcnt_channel_set_level_action(channel,
+    PCNT_CHANNEL_LEVEL_ACTION_KEEP,
+    PCNT_CHANNEL_LEVEL_ACTION_KEEP);
+
+  if(FAN_PCNT_FILTER_NS > 0)
+  {
+    pcnt_glitch_filter_config_t filterConfig = {};
+    filterConfig.max_glitch_ns = FAN_PCNT_FILTER_NS;
+    if(pcnt_unit_set_glitch_filter(fanPcntUnit[fan], &filterConfig) != ESP_OK)
+    {
+      Serial.print(F("FAN: PCNT filtr selhal na kanalu "));
+      Serial.println(fan);
+    }
+  }
+
+  pcnt_unit_enable(fanPcntUnit[fan]);
+  pcnt_unit_clear_count(fanPcntUnit[fan]);
+  pcnt_unit_start(fanPcntUnit[fan]);
 }
 
-void IRAM_ATTR OnFanPulseB()
+void DrainPcnt()
 {
-  uint32_t now = micros();
-  portENTER_CRITICAL_ISR(&fanMux);
-  if(now - fanLastPulseUs[FAN_B] >= FAN_PULSE_MIN_US)
+  for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
-    fanLastPulseUs[FAN_B] = now;
-    fanPulses[FAN_B] = fanPulses[FAN_B] + 1;
+    if(fanPcntUnit[i] == NULL)
+    {
+      continue;
+    }
+    int value = 0;
+    if(pcnt_unit_get_count(fanPcntUnit[i], &value) == ESP_OK && value > 0)
+    {
+      pcnt_unit_clear_count(fanPcntUnit[i]);
+      fanPcntTotal[i] += (uint32_t)value;
+    }
   }
-  portEXIT_CRITICAL_ISR(&fanMux);
 }
 
 void ResetFanWindow(FanWindow* window)
 {
   window->totalSlots = 0;
   window->mismatchSlots = 0;
+  window->windowMs = 0;
   for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
     window->avgPulses[i] = 0;
     window->avgMs[i] = 0;
     window->avgSlots[i] = 0;
     window->nonZeroSlots[i] = 0;
+    window->windowPulses[i] = 0;
   }
 }
 
@@ -84,9 +129,9 @@ void fanInit()
   ResetFanWindow(&fanWindow);
   for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
-    fanPulses[i] = 0;
-    fanLastPulseUs[i] = 0;
+    fanPcntTotal[i] = 0;
     fanPrevPulses[i] = 0;
+    fanWindowPulses[i] = 0;
     fanRunFlag[i] = false;
     fanHeldPulses[i] = 0;
     fanHeldMs[i] = 0;
@@ -94,11 +139,12 @@ void fanInit()
     fanPrevRunning[i] = false;
   }
   fanHeldValid = false;
+  SetupPcnt(FAN_A, FAN_TACH_PIN_A);
+  SetupPcnt(FAN_B, FAN_TACH_PIN_B);
   pinMode(FAN_TACH_PIN_A, INPUT_PULLUP);
   pinMode(FAN_TACH_PIN_B, INPUT_PULLUP);
   fanLastSlot = millis();
-  attachInterrupt(digitalPinToInterrupt(FAN_TACH_PIN_A), OnFanPulseA, FALLING);
-  attachInterrupt(digitalPinToInterrupt(FAN_TACH_PIN_B), OnFanPulseB, FALLING);
+  fanWindowStartMs = fanLastSlot;
 }
 
 void fanLoop()
@@ -110,21 +156,15 @@ void fanLoop()
     return;
   }
   fanLastSlot = now;
-
-  uint32_t pulses[FAN_COUNT];
-  portENTER_CRITICAL(&fanMux);
-  for(uint8_t i = 0; i < FAN_COUNT; i++)
-  {
-    pulses[i] = fanPulses[i];
-  }
-  portEXIT_CRITICAL(&fanMux);
+  DrainPcnt();
 
   uint32_t delta[FAN_COUNT];
   bool running[FAN_COUNT];
   for(uint8_t i = 0; i < FAN_COUNT; i++)
   {
-    delta[i] = pulses[i] - fanPrevPulses[i];
-    fanPrevPulses[i] = pulses[i];
+    delta[i] = fanPcntTotal[i] - fanPrevPulses[i];
+    fanPrevPulses[i] = fanPcntTotal[i];
+    fanWindowPulses[i] += delta[i];
     running[i] = delta[i] >= FAN_RUN_MIN_PULSES;
     fanRunFlag[i] = running[i];
   }
@@ -170,6 +210,15 @@ void fanLoop()
 
 void fanTake(FanWindow* window)
 {
+  unsigned long now = millis();
+  for(uint8_t i = 0; i < FAN_COUNT; i++)
+  {
+    fanWindow.windowPulses[i] = fanWindowPulses[i];
+    fanWindowPulses[i] = 0;
+  }
+  fanWindow.windowMs = (uint32_t)(now - fanWindowStartMs);
+  fanWindowStartMs = now;
+
   *window = fanWindow;
   ResetFanWindow(&fanWindow);
 }
@@ -205,6 +254,23 @@ char fanStateChar()
   return (char)('0' + (fanRunFlag[FAN_A] ? 1 : 0) + (fanRunFlag[FAN_B] ? 2 : 0));
 }
 
+void fanScopeText(const FanWindow* window, uint8_t fan, char* out, size_t len)
+{
+  uint32_t rate = window->windowMs == 0
+    ? 0
+    : (uint32_t)((uint64_t)window->windowPulses[fan] * 1000ULL / window->windowMs);
+  snprintf(out, len,
+    "%c pcnt=%lu/%lums rate=%lu/s slotu=%u prumer=%u ot/min=%u bezel=%u%%",
+    fan == FAN_A ? 'A' : 'B',
+    (unsigned long)window->windowPulses[fan],
+    (unsigned long)window->windowMs,
+    (unsigned long)rate,
+    window->totalSlots,
+    window->avgSlots[fan],
+    fanRpm(window, fan),
+    fanRunPct(window, fan));
+}
+
 void fanLog(const FanWindow* window, const char* label)
 {
   Serial.printf("FAN %s: slotu=%u mismatch=%u",
@@ -222,4 +288,11 @@ void fanLog(const FanWindow* window, const char* label)
       (unsigned long)window->avgPulses[i]);
   }
   Serial.println();
+  char line[180];
+  for(uint8_t i = 0; i < FAN_COUNT; i++)
+  {
+    fanScopeText(window, i, line, sizeof(line));
+    Serial.print(F("FAN scope: "));
+    Serial.println(line);
+  }
 }

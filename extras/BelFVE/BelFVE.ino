@@ -14,6 +14,9 @@
 #ifndef FW_VERSION
 #define FW_VERSION 0
 #endif
+#ifndef TOPIC_FVE_SCOPE
+#define TOPIC_FVE_SCOPE TOPIC_FVE_DIAG "/scope"
+#endif
 #define HA_INTERVAL_MS 60000UL
 #define DIAG_INTERVAL_MS 300000UL
 #define RECONNECT_INTERVAL_MS 5000UL
@@ -22,7 +25,7 @@
 #define TIME_SYNC_TIMEOUT_MS 15000UL
 #define TLS_HANDSHAKE_TIMEOUT_S 30
 #define MQTT_TLS_PORT 8883
-#define MQTT_BUFFER_SIZE 256
+#define MQTT_BUFFER_SIZE 384
 #define MQTT_KEEP_ALIVE 60
 #define TIME_VALID_THRESHOLD 1700000000UL
 #define NTP_SERVER_1 "pool.ntp.org"
@@ -318,6 +321,14 @@ void PublishDiagnostics(const DetectorWindow* window, const FanWindow* fans)
   currentDiagData.fanMismatchSlots = fans->mismatchSlots;
 
   mqtt.publish(TOPIC_FVE_DIAG, (const uint8_t*)&currentDiagData, sizeof(DiagData), false);
+
+  char scope[180];
+  for(uint8_t i = 0; i < FAN_COUNT; i++)
+  {
+    fanScopeText(fans, i, scope, sizeof(scope));
+    mqtt.publish(TOPIC_FVE_SCOPE, scope, false);
+  }
+
   currentDiagData.loopMaxMs = 0;
   detectorLog(window, "diag", heaterState);
   fanLog(fans, "diag");

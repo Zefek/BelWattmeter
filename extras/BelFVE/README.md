@@ -63,7 +63,7 @@ FG každého ventilátoru budí **optočlen**; obě domény jsou galvanicky odd�
 strana ventilátoru (12 V, plovoucí)        strana ESP32 (3,3 V)
   +12 V ──── 4k7 ──── anoda                  kolektor ──── GPIO25 / GPIO26
   FG (3. vodič) ────── katoda                emitor ─────── GND ESP32
-  GND ventilátoru ──── GND 12V zdroje        vnitřní pull-up, externí RC netřeba
+  GND ventilátoru ──── GND 12V zdroje        4k7 na 3,3 V, bez kondenzátoru
 
               ↑ PC814, bariéra 5 kVrms, obě země NESPOJENÉ ↑
 ```
@@ -72,7 +72,9 @@ Polarita vychází nezměněná: FG dole → LED svítí → fototranzistor sepn
 
 **Proč proudová smyčka.** Dvanáctivoltový zdroj ventilátorů je napájený ze stejnosměrné sběrnice FVE, kterou seká IGBT můstek. Je sice izolovaný, takže jeho výstupní zem plave, ale přes kapacitu mezi vinutími se ta zem na spínacích hranách hýbe. Dokud k ní vedl zemní drát od ESP32, byl to **jediný galvanický most mezi doménami** a tekl jím posuvný proud. Optočlen ten most ruší a zároveň mění vstup z napěťového uzlu se 45 kΩ, kterému stačí desítky mikroampér, na proudovou smyčku, která potřebuje miliampéry.
 
-**Dimenzování odporu.** `I_F = (12 − 1,1 − 0,6) / 4k7 = 2,2 mA`, tedy pod datasheetovým `If(max) = 5 mA` ventilátoru. PC814 je AC typ se dvěma antiparalelními LED, takže na polaritě vstupu nezáleží; jeho `CTR` začíná na 20 %, což proti vnitřnímu pull-upu ESP32 (~45 kΩ, potřeba 0,07 mA) dává rezervu šestinásobnou. Silnější pull-up by si vyžádal víc proudu, ne míň — proto na straně ESP32 **žádný externí odpor nepatří**.
+**Dimenzování odporu.** `I_F = (12 − 1,1 − 0,6) / 4k7 = 2,2 mA`, tedy pod datasheetovým `If(max) = 5 mA` ventilátoru. PC814 je AC typ se dvěma antiparalelními LED, takže na polaritě vstupu nezáleží.
+
+**Na straně ESP32 je 4k7 na 3,3 V a nic víc, hlavně žádný kondenzátor** — pomalá hrana na pinu byla jednou z příčin ztracených hran, viz níž. Silnější pull-up dává rychlou hranu, ale chce víc proudu z fototranzistoru: 0,71 mA. PC814 má `CTR` od 20 %, takže nejhorší kus by při 2,2 mA dodal jen 0,44 mA a nesaturoval. Osazené kusy saturují (naměřeno 1,48 V střední hodnoty na pinu, tedy nízká úroveň kolem 0,15 V); **po výměně optočlenu to ověřit znovu**. Kdyby nesaturoval, snížit odpor u LED na 2k2 (4,7 mA, pořád pod limitem), ne zeslabovat pull-up.
 
 **Čítání dělá PCNT, ne přerušení.** Důvod viz [Proč PCNT a ne `attachInterrupt`](#proč-pcnt-a-ne-attachinterrupt) níž: obsluha přerušení na rozklepané hraně ztrácela 38 % hran. PCNT vzorkuje po 12,5 ns, má vlastní hardwarový filtr zákmitů (`FAN_PCNT_FILTER_NS`) a mezi hranou a číslem u něj není žádný software. Vzorkovací úloha detektoru by se sem nehodila — nejkratší půlperioda FG je kolem 1,1 ms, takže by na ni z 1ms ticku vycházel jeden vzorek.
 
@@ -133,7 +135,7 @@ Ventilátor dává podle datasheetu **2 impulzy FG na otáčku** — `T = T1+T2+
 
 Jenže PCNT je nastavený tak, aby počítal **obě hrany** (`PCNT_CHANNEL_EDGE_ACTION_INCREASE` pro náběžnou i sestupnou). Konstanta proto neznamená „impulzů na otáčku", ale **„započtených událostí na otáčku"** — a to jsou **4**. Dvojka by dala dvojnásobek, tedy 24 400 ot/min, což je mimo katalog.
 
-> Dřív to vycházelo na 4 ze stejně platného, ale jiného důvodu: **`attachInterrupt(..., FALLING)` se na ESP32 chová jako `CHANGE`**. Změřeno 3. 10. 2026 nástrojem [FanScope32](../FanScope32) — změněna jediná konstanta a výsledek shodný na desetinu hertzu (815,0 hran/s, intervaly 1134/1307 µs v obou režimech). Pro `fan.cpp` to už nehraje roli, ale pro jiné projekty na ESP32 ano.
+> Dřív, s přerušením, vycházelo na 4 i `FALLING` — spouštěl se na obou hranách (změřeno 3. 10. 2026 nástrojem [FanScope32](../FanScope32), 815,0 hran/s v režimu `CHANGE` i `FALLING`). **Nebyla to ale vlastnost jádra, jak tu dřív stálo.** Měřilo se s 33 nF na pinu, tedy na hraně s náběhem kolem 310 µs, a přesně tenhle symptom popisuje [arduino-esp32 #4172](https://github.com/espressif/arduino-esp32/issues/4172): hrana pomalejší než ~200 µs (náběh) nebo ~40 µs (sestup) spouští i na opačné hraně. Na rychlé hraně by `FALLING` nejspíš počítal jen sestupné — neověřeno.
 
 ## Proč PCNT a ne `attachInterrupt`
 
@@ -145,13 +147,22 @@ Jenže PCNT je nastavený tak, aby počítal **obě hrany** (`PCNT_CHANNEL_EDGE_
 | PCNT s filtrem 10 µs | ~800 | pravé hrany; sedí na FanScope32 (815) na 2 % |
 | přerušení | ~490 | **62 %** |
 
-Hrana z optočlenu je rozklepaná — na každou pravou hranu připadá zhruba jeden přechod kratší než 10 µs. Z toho se nedělala přerušení navíc, jak by člověk čekal, ale **chybějící**.
+Hrana na pinu byla rozklepaná — na každou pravou hranu připadá zhruba jeden přechod kratší než 10 µs. Z toho se nedělala přerušení navíc, jak by člověk čekal, ale **chybějící**.
 
-**PCNT čte výstup téhož vstupního budiče jako logika přerušení**, takže jeho 800 proti 490 dokazuje, že se hrana do číslicové podoby dostane celá a ztráta je výhradně v cestě přerušení. Mechanismus se pojmenovat nepodařilo: vzorec ukazuje na **zaslepení** po každé obsluze, ne na náhodnou ztrátu (žádné dvě hrany blíž než 800 µs, trojnásobné mezery jen 0,01 %), a nevysvětlený zůstal i rozpor, že **týž firmware na USB počítal správně**.
+**PCNT čte výstup téhož vstupního budiče jako logika přerušení**, takže jeho 800 proti 490 dokazuje, že se hrana do číslicové podoby dostane celá a ztráta je výhradně v cestě přerušení.
 
-Projevovalo se to jako údaj, který se měnil s napájením desky: 487 na vlastním zdroji, 574 s jiným přívodem, 607 se zemí notebooku, 813 na USB. Žádná z těch změn se nedotkla ventilátoru ani signálu — všechny jen posouvaly to, nakolik čip rozklepanou hranu rozsoudí. **Hledat to na vstupu je slepá ulička**, a stála dva dny.
+Sešly se tu dvě známé chyby ESP32:
 
-> **Zbývá jedna neověřená stopa.** Pokud na straně ESP32 zůstal z dřívějšího filtru `4k7 + 33 nF`, dává to `τ ≈ 141 µs` a tedy pomalou hranu — a pomalá hrana kolem prahu je právě to, co překlápí vícekrát. **Vypájet ten kondenzátor** by pravděpodobně zákmity odstranilo u zdroje. S PCNT to není nutné, ale byl by to čistší signál a potvrdilo by to příčinu.
+- **[Erratum GPIO-3.14](https://docs.espressif.com/projects/esp-chip-errata/en/latest/esp32/03-errata-description/esp32/gpio-edge-interrupts.html)**, všechny revize v0.0–v3.1. GPIO0–31 sdílejí jeden stavový registr přerušení. V taktu, kdy obsluha maže svůj bit, se nemůže aktualizovat celý registr, a **hrana navzorkovaná v tu chvíli se ztratí** — ztratí, ne zdvojí. Espressif proto nedoporučuje mít v jedné skupině vedle hranového přerušení žádné další; tady byla dvě, GPIO25 a 26. [Nezávisle změřeno](https://www.quantulum.co.uk/blog/esp32-edge-triggered-interrupt-bug/): hrany se ztrácely spolehlivě při odstupu kolem 2,4 µs.
+- **[arduino-esp32 #4172](https://github.com/espressif/arduino-esp32/issues/4172)**. Pomalá hrana projde prahem vícekrát; doporučení je náběh pod 2 µs (10–90 %). Na pinu byl z dřívějšího filtru proti rušení `4k7 + 33 nF`, tedy `τ ≈ 141 µs` a náběh kolem 310 µs — stopadesátkrát víc.
+
+Pomalá hrana udělala z každé pravé hrany dávku přechodů vzdálených jednotky mikrosekund, tedy přesně v měřítku, na kterém erratum polyká. Víc přechodů znamenalo víc přerušení, víc mazání sdíleného registru a víc příležitostí ztratit hranu, i hranu druhého ventilátoru.
+
+Projevovalo se to jako údaj závislý na napájení desky: 487 na vlastním zdroji, 574 s jiným přívodem, 607 se zemí notebooku, 813 na USB. Výklad, který na to sedí, **ale ověřený není**: kolikrát pomalá hrana zakmitá, určuje šum na referenci ESP32, a ten nejvíc dodává spínaný HDR-15-5 — na USB v cestě nebyl. Ventilátoru ani signálu se žádná z těch změn nedotkla. **Hledat to na vstupu byla slepá ulička**, a stála dva dny.
+
+Kondenzátor je od 4. 10. 2026 venku. Nevysvětlené zůstalo, proč histogram mezer ukazoval spíš na zhruba milisekundovou mrtvou dobu než na náhodné ztráty (žádné dvě hrany blíž než 800 µs, trojnásobné mezery jen 0,01 %).
+
+> **Pro další projekty na ESP32:** nejvýš jedno hranové přerušení na skupinu pinů (GPIO0–31 / 32–39 / RTC), hrany pod 2 µs bez RC na pinu, a na čítání hran PCNT.
 
 `DET_STATE_OFF`, `DET_DROPOUT_MIN_RUN` a všech pět `FAN_*` ladicích konstant (včetně `FAN_PCNT_FILTER_NS`) má v `detector.cpp` / `fan.cpp` fallback, takže **starší `config.h` bez nich se přeloží** — nasazení nemusí čekat na úpravu config repa.
 

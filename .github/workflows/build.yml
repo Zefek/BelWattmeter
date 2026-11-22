@@ -31,7 +31,7 @@ jobs:
           cppcheck --enable=all --language=c++ --suppress=missingIncludeSystem --suppress=unusedFunction --suppress=unusedStructMember --suppress=noExplicitConstructor --suppress=noCopyConstructor --suppress=noOperatorEq --suppress=cstyleCast --suppress=constParameterCallback --suppress=constParameterPointer --suppress=constVariablePointer --suppress=unsignedLessThanZero --suppress=unsignedPositive --suppress=checkersReport --suppress=noDestructor --suppress=unmatchedSuppression --suppress=variableScope --error-exitcode=1 src/
 
       - name: Install Arduino CLI
-        uses: arduino/setup-arduino-cli@81d310742121c928ea9c8bbd407b4217b432ae02  # v2.0.0
+        uses: arduino/setup-arduino-cli@b3cda96fddef6af6c56b4c5efb5c47e2357935db  # v2.1.0
 
       - name: Initialize Arduino CLI
         run: |
